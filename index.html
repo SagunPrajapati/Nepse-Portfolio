@@ -89,6 +89,16 @@
   --dot-c:rgba(220,80,120,0.07);
 }
 
+/* ═══ MOBILE FIXES ═══ */
+@media (max-width: 600px) {
+  .f-input, .f-sel { font-size: 16px !important; } /* prevents iOS zoom on focus */
+  .btn-auth { padding: 15px; font-size: 15px; }
+  .auth-card { padding: 26px 20px; border-radius: 16px; }
+  .auth-heading { font-size: 24px; }
+  .topbar { padding: 0 12px; gap: 6px; }
+  .theme-strip { display: none; } /* hide on very small screens, accessible via menu */
+  .sync-t { display: none; }
+}
 /* ═══ RESET ═══ */
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
 html{font-size:14px}
@@ -433,12 +443,12 @@ tr:hover .row-act{opacity:1}
       <div class="auth-alert" id="si-alert"></div>
       <div class="f-row">
         <label class="f-label">Email or Phone Number</label>
-        <input class="f-input" id="si-id" type="text" placeholder="email@example.com or 98XXXXXXXX" autocomplete="username">
+        <input class="f-input" id="si-id" type="email" inputmode="email" placeholder="email@example.com or 98XXXXXXXX" autocomplete="username" enterkeyhint="next" onkeydown="if(event.key==='Enter')document.getElementById('si-pw').focus()">
       </div>
       <div class="f-row">
         <label class="f-label">Password</label>
         <div class="f-pw-wrap">
-          <input class="f-input" id="si-pw" type="password" placeholder="Your password" autocomplete="current-password">
+          <input class="f-input" id="si-pw" type="password" placeholder="Your password" autocomplete="current-password" enterkeyhint="done" onkeydown="if(event.key==='Enter')doSignIn()">
           <span class="f-eye" onclick="tglPw('si-pw',this)">👁</span>
         </div>
       </div>
@@ -1074,23 +1084,55 @@ function json(obj) {
 const UK='nepse_users_v1',SK='nepse_sess_v1',DK='nepse_data_v4',PK='nepse_px_v4',TK='nepse_theme_v1';
 const PCOLS=['#00d085','#4090ff','#ff7b54','#9b6dff','#ffb300','#ff4757','#00c6d8','#c8e648'];
 
-function gU(){try{return JSON.parse(localStorage.getItem(UK)||'{}')}catch(e){return{}}}
-function sU(u){localStorage.setItem(UK,JSON.stringify(u))}
-function gS(){try{return JSON.parse(localStorage.getItem(SK)||'null')}catch(e){return null}}
-function sS(s){localStorage.setItem(SK,JSON.stringify(s))}
-function cS(){localStorage.removeItem(SK)}
+// ═══ STORAGE LAYER — 3-tier fallback so mobile always works ═══
+// localStorage blocked on local files in iOS Safari & some Android browsers
+const _mem={};
+function lsSet(k,v){try{localStorage.setItem(k,v);return true}catch(e){try{sessionStorage.setItem(k,v);return true}catch(e2){_mem[k]=v;return false}}}
+function lsGet(k){try{const v=localStorage.getItem(k);if(v!==null)return v}catch(e){}try{const v=sessionStorage.getItem(k);if(v!==null)return v}catch(e){}return _mem[k]||null;}
+function lsDel(k){try{localStorage.removeItem(k)}catch(e){}try{sessionStorage.removeItem(k)}catch(e){}delete _mem[k];}
+function storageAvailable(){try{localStorage.setItem('_t','1');localStorage.removeItem('_t');return 'localStorage';}catch(e){try{sessionStorage.setItem('_t','1');sessionStorage.removeItem('_t');return 'sessionStorage';}catch(e2){return 'memory';}}}
+
+function gU(){try{return JSON.parse(lsGet(UK)||'{}')}catch(e){return{}}}
+function sU(u){lsSet(UK,JSON.stringify(u))}
+function gS(){try{return JSON.parse(lsGet(SK)||'null')}catch(e){return null}}
+function sS(s){lsSet(SK,JSON.stringify(s))}
+function cS(){lsDel(SK)}
 
 // hash (demo only — not cryptographic)
 function hp(p){let h=0;for(let i=0;i<p.length;i++)h=(Math.imul(31,h)+p.charCodeAt(i))|0;return 'H'+Math.abs(h).toString(16)+'L'+p.length}
 
-// seed demo user
-(function(){const u=gU();if(!u['demo@nepse.app']){u['demo@nepse.app']={em:'demo@nepse.app',ph:'9800000000',fn:'Demo',ln:'User',pw:hp('Demo@123'),dt:new Date().toISOString()};sU(u);}})();
+// Ensure demo user always exists (re-runs on every load to handle cleared storage)
+function ensureDemo(){const u=gU();if(!u['demo@nepse.app']){u['demo@nepse.app']={em:'demo@nepse.app',ph:'9800000000',fn:'Demo',ln:'User',pw:hp('Demo@123'),dt:new Date().toISOString()};sU(u);}}
+ensureDemo();
 
-function show(id){document.querySelectorAll('.auth-wrap').forEach(e=>e.style.display='none');document.getElementById(id).style.display='flex';clrAlerts()}
-function clrAlerts(){document.querySelectorAll('.auth-alert').forEach(e=>{e.style.display='none';e.textContent=''});document.querySelectorAll('.f-err').forEach(e=>e.style.display='none');document.querySelectorAll('.f-input').forEach(e=>e.classList.remove('err'))}
-function alrt(id,msg,type='error'){const e=document.getElementById(id);if(!e)return;e.textContent=msg;e.className='auth-alert '+type;e.style.display='block'}
+// Show storage warning banner if localStorage is unavailable (common on mobile file://)
+(function(){
+  const st=storageAvailable();
+  if(st!=='localStorage'){
+    const w=document.createElement('div');
+    w.style.cssText='position:fixed;top:0;left:0;right:0;background:#c07000;color:#fff;font-size:11px;padding:8px 14px;z-index:9999;font-family:monospace;text-align:center;line-height:1.6';
+    w.innerHTML='⚠ Storage limited on this browser ('+st+'). Data may not persist after closing. <strong>Best fix: host on GitHub Pages.</strong> <span onclick="this.parentNode.remove()" style="cursor:pointer;margin-left:8px;font-weight:700;font-size:14px">✕</span>';
+    document.body.prepend(w);
+  }
+})();
+
+function show(id){
+  document.querySelectorAll('.auth-wrap').forEach(e=>e.style.display='none');
+  const el=document.getElementById(id);if(el)el.style.display='flex';
+  clrAlerts();window.scrollTo(0,0);
+}
+function clrAlerts(){
+  document.querySelectorAll('.auth-alert').forEach(e=>{e.style.display='none';e.textContent=''});
+  document.querySelectorAll('.f-err').forEach(e=>e.style.display='none');
+  document.querySelectorAll('.f-input').forEach(e=>e.classList.remove('err'));
+}
+function alrt(id,msg,type='error'){
+  const e=document.getElementById(id);if(!e)return;
+  e.textContent=msg;e.className='auth-alert '+type;e.style.display='block';
+  setTimeout(()=>e.scrollIntoView({behavior:'smooth',block:'nearest'}),50);
+}
 function tglPw(id,ico){const i=document.getElementById(id);if(!i)return;i.type=i.type==='password'?'text':'password';ico.textContent=i.type==='password'?'👁':'🙈'}
-function pwStr(p){let s=0;if(p.length>=8)s++;if(/[A-Z]/.test(p))s++;if(/[0-9]/.test(p))s++;if(/[^A-Za-z0-9]/.test(p))s++;const lb=['','Weak','Fair','Good','Strong'],cl=['','s1','s2','s3','s4'];for(let i=1;i<=4;i++){const b=document.getElementById('pb'+i);b.className='pwd-bar'+(i<=s?' '+cl[s]:'')}document.getElementById('pw-lbl').textContent=p.length===0?'Enter a password':lb[s]||'Weak'}
+function pwStr(p){let s=0;if(p.length>=8)s++;if(/[A-Z]/.test(p))s++;if(/[0-9]/.test(p))s++;if(/[^A-Za-z0-9]/.test(p))s++;const lb=['','Weak','Fair','Good','Strong'],cl=['','s1','s2','s3','s4'];for(let i=1;i<=4;i++){const b=document.getElementById('pb'+i);if(b)b.className='pwd-bar'+(i<=s?' '+cl[s]:'')}const lbl=document.getElementById('pw-lbl');if(lbl)lbl.textContent=p.length===0?'Enter a password':lb[s]||'Weak'}
 
 function doSignUp(){
   clrAlerts();
@@ -1115,12 +1157,22 @@ function doSignIn(){
   clrAlerts();
   const id=document.getElementById('si-id').value.trim().toLowerCase();
   const pw=document.getElementById('si-pw').value;
-  if(!id||!pw){alrt('si-alert','Please enter your email/phone and password.');return}
+  if(!id||!pw){alrt('si-alert','Please enter your email/phone and password.');return;}
+  ensureDemo(); // re-seed demo in case storage was wiped
   const users=gU();
+  if(Object.keys(users).length===0){
+    alrt('si-alert','⚠ No accounts on this device/browser. If you signed up on a different browser or device, accounts do not transfer automatically. Please sign up here too, or host on GitHub Pages for shared access.');
+    return;
+  }
   let user=users[id];
-  if(!user)user=Object.values(users).find(u=>u.ph===id||u.ph===id.replace(/^0/,''));
-  if(!user){alrt('si-alert','No account found with that email or phone number.');return}
-  if(user.pw!==hp(pw)){alrt('si-alert','Incorrect password. Please try again.');return}
+  if(!user)user=Object.values(users).find(u=>u.ph&&(u.ph===id||u.ph===id.replace(/^0/,'')));
+  if(!user){
+    const known=Object.keys(users).filter(k=>k!=='demo@nepse.app');
+    const hint=known.length>0?' Accounts on this device: '+known.map(e=>e.split('@')[0]+'@…').join(', ')+'.':' No personal accounts found on this device/browser.';
+    alrt('si-alert','Account not found.'+hint+' Did you sign up on a different browser?');
+    return;
+  }
+  if(user.pw!==hp(pw)){alrt('si-alert','Incorrect password. Please try again.');return;}
   startSession(user);
 }
 
@@ -1168,7 +1220,13 @@ function updUserUI(u){
   const uPh=document.getElementById('um-ph');if(uPh)uPh.textContent=u.ph?'📱 '+u.ph:'';
 }
 
-function checkAuth(){const s=gS();if(s){document.getElementById('auth-sec').style.display='none';loadApp(s)}}
+function checkAuth(){
+  const s=gS();
+  if(s&&s.em){
+    document.getElementById('auth-sec').style.display='none';
+    loadApp(s);
+  }
+}
 
 // ═══════════════════════════════════════════
 // APP STATE  — per-user, keyed by email
