@@ -1659,66 +1659,6 @@ function updateMkt() { const npt = new Date(Date.now() + (5 * 60 + 45) * 60000 -
 
 // Kick off
 init();
-<!-- Import Trade Plan Button -->
-<div style="padding: 0 13px 10px;">
-  <button onclick="importTradePlanWatchlist()" 
-          style="width:100%; padding: 10px; background: var(--acc-d); color: var(--acc); 
-                 border: 1px solid var(--acc2); border-radius: 8px; font-size: 11px; 
-                 font-weight: 700; cursor: pointer;">
-    📥 Import from Today's Trade Plan
-  </button>
-</div>
-
-<script>
-// ======================
-// Import Trade Plan Watchlist
-// ======================
-async function importTradePlanWatchlist() {
-    toast('Fetching latest report...', '');
-
-    try {
-        // Get latest report file from GitHub
-        const res = await fetch('https://api.github.com/repos/SagunPrajapati/share/contents');
-        const files = await res.json();
-
-        const latestReport = files
-            .filter(f => f.name.endsWith('.json') && /^\d{4}-\d{2}-\d{2}\.json$/.test(f.name))
-            .sort((a, b) => b.name.localeCompare(a.name))[0];
-
-        if (!latestReport) throw new Error("No report found");
-
-        const rawUrl = `https://raw.githubusercontent.com/SagunPrajapati/share/main/${latestReport.name}`;
-        const reportRes = await fetch(rawUrl);
-        const report = await reportRes.json();
-
-        if (!report.tradePlan || report.tradePlan.length === 0) {
-            toast("No Trade Plan entries found in today's report", 'er');
-            return;
-        }
-
-        let added = 0;
-        report.tradePlan.forEach(item => {
-            const sym = String(item.sym || '').trim().toUpperCase();
-            if (sym && !A.watchlist.includes(sym)) {
-                A.watchlist.push(sym);
-                added++;
-            }
-        });
-
-        if (added > 0) {
-            await dbSaveWatchlist(A.watchlist);
-            renderAll();
-            toast(`✅ Added ${added} symbols from Trade Plan`, 'ok');
-        } else {
-            toast('All symbols already in watchlist', 'ok');
-        }
-
-    } catch (err) {
-        console.error(err);
-        toast('Failed to load Trade Plan. Please try again later.', 'er');
-    }
-}
-</script>
 </script>
 </body>
 </html>
