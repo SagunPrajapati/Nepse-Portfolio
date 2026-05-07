@@ -1659,67 +1659,6 @@ function updateMkt() { const npt = new Date(Date.now() + (5 * 60 + 45) * 60000 -
 
 // Kick off
 init();
-
-  <!-- === TRADE PLAN IMPORT === -->
-<button onclick="importTradePlanWatchlist()" 
-        style="margin: 8px 13px; padding: 8px 14px; background: var(--acc-d); color: var(--acc); border: 1px solid var(--acc2); border-radius: 8px; font-size: 11px; font-weight: 700; cursor: pointer;">
-  📥 Import Trade Plan → Watchlist
-</button>
-
-<script>
-// Import symbols from Trade Plan
-async function importTradePlanWatchlist() {
-  toast('Fetching latest Trade Plan...', 'ok');
-  
-  try {
-    // Get latest report date
-    const repoUrl = 'https://api.github.com/repos/SagunPrajapati/share/contents';
-    const filesRes = await fetch(repoUrl);
-    const files = await filesRes.json();
-    
-    // Find latest JSON report (YYYY-MM-DD.json)
-    const reports = files
-      .filter(f => f.name.endsWith('.json') && f.name.match(/^\d{4}-\d{2}-\d{2}\.json$/))
-      .sort((a,b) => b.name.localeCompare(a.name));
-    
-    if (reports.length === 0) {
-      toast('No reports found', 'er');
-      return;
-    }
-
-    const latestFile = reports[0].name;
-    const rawUrl = `https://raw.githubusercontent.com/SagunPrajapati/share/main/${latestFile}`;
-    
-    const res = await fetch(rawUrl);
-    const report = await res.json();
-
-    if (!report.tradePlan || report.tradePlan.length === 0) {
-      toast('No Trade Plan entries found in latest report', 'er');
-      return;
-    }
-
-    let added = 0;
-    report.tradePlan.forEach(item => {
-      const sym = (item.sym || '').toUpperCase().trim();
-      if (sym && !A.watchlist.includes(sym)) {
-        A.watchlist.push(sym);
-        added++;
-      }
-    });
-
-    if (added > 0) {
-      await dbSaveWatchlist(A.watchlist);
-      renderAll();
-      toast(`✅ Added ${added} symbols from Trade Plan to Watchlist`, 'ok');
-    } else {
-      toast('All symbols already in watchlist', 'ok');
-    }
-
-  } catch (e) {
-    console.error(e);
-    toast('Failed to fetch Trade Plan. Check console.', 'er');
-  }
-}
 </script>
 </body>
 </html>
