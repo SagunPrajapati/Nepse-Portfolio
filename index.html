@@ -470,7 +470,7 @@ tr:hover .row-act{opacity:1}
 <div id="loading-screen">
   <div class="loading-logo">📈</div>
   <div class="loading-bar"><div class="loading-fill"></div></div>
-  <div class="loading-txt">NEPSE PORTFOLIO · LOADING</div>
+  <div class="loading-txt" id="loading-txt">NEPSE PORTFOLIO · CONNECTING</div>
 </div>
 
 <!-- AUTH -->
@@ -980,28 +980,125 @@ let CH = { alloc: null, pl: null };
 // ════════════════════════════════════════════════════
 async function init() {
   applyTheme(localStorage.getItem(TK) || 'dark');
-  const { data: { session } } = await sb.auth.getSession();
+
+  // ── FAST PATH: show UI immediately from localStorage cache ──
+  // This makes the app feel instant — render cached data first, 
+  // then quietly sync with Supabase in the background
+  const cachedUser = _getCachedUser();
+  if (cachedUser) {
+    A.user = cachedUser;
+    _loadFromCache(); // instant render from localStorage
+    hideLoading();
+    document.getElementById('auth-sec').style.display = 'none';
+    document.getElementById('app-view').style.display = 'flex';
+    updUserUI();
+    renderAll();
+    updateMkt();
+    setInterval(updateMkt, 60000);
+    // Then sync with Supabase in background (non-blocking)
+    _syncWithSupabase();
+    return;
+  }
+
+  // ── SLOW PATH: first load, must check session ──
+  // Add a 5s timeout so we never hang forever
+  const sessionPromise = sb.auth.getSession();
+  const timeoutPromise = new Promise(res => setTimeout(() => res({ data: { session: null }, timedOut: true }), 5000));
+  const result = await Promise.race([sessionPromise, timeoutPromise]);
+  const session = result.data?.session;
+
   hideLoading();
   if (session) {
     A.user = session.user;
+    _setCachedUser(session.user);
     await loadApp();
   } else {
     document.getElementById('auth-sec').style.display = 'block';
     show('v-signin');
   }
-  // Listen for auth state changes
+
+  // Auth state listener
   sb.auth.onAuthStateChange(async (event, session) => {
     if (event === 'SIGNED_IN' && session) {
       A.user = session.user;
+      _setCachedUser(session.user);
       document.getElementById('auth-sec').style.display = 'none';
       await loadApp();
     } else if (event === 'SIGNED_OUT') {
       A.user = null;
+      _clearCachedUser();
+      A.portfolios = []; A.activeId = null; A.watchlist = [];
       document.getElementById('app-view').style.display = 'none';
       document.getElementById('auth-sec').style.display = 'block';
       show('v-signin');
     }
   });
+}
+
+// ── USER CACHE (for instant startup) ──
+const UC_KEY = 'nepse_ucache_v1';
+const DC_KEY = 'nepse_dcache_v1';
+function _getCachedUser() { try { const u = JSON.parse(localStorage.getItem(UC_KEY)||'null'); if(u&&u.id&&u.email) return u; } catch(e){} return null; }
+function _setCachedUser(u) { try { localStorage.setItem(UC_KEY, JSON.stringify({id:u.id,email:u.email,user_metadata:u.user_metadata})); } catch(e){} }
+function _clearCachedUser() { localStorage.removeItem(UC_KEY); localStorage.removeItem(DC_KEY); }
+
+function _loadFromCache() {
+  // Load portfolios/watchlist from localStorage so UI renders instantly
+  try {
+    const cached = JSON.parse(localStorage.getItem(DC_KEY)||'null');
+    if (cached && cached.portfolios) {
+      A.portfolios = cached.portfolios;
+      A.activeId = cached.activeId || A.portfolios[0]?.id || null;
+      A.watchlist = cached.watchlist || [];
+    }
+    // Load price cache
+    const pxc = JSON.parse(localStorage.getItem('nepse_px_cache')||'null');
+    if (pxc && pxc.prices) { A.prices = pxc.prices; A.lastSync = pxc.lastSync; }
+  } catch(e){}
+}
+
+function _saveToCache() {
+  try {
+    localStorage.setItem(DC_KEY, JSON.stringify({
+      portfolios: A.portfolios, activeId: A.activeId, watchlist: A.watchlist, ts: Date.now()
+    }));
+  } catch(e){}
+}
+
+async function _syncWithSupabase() {
+  // Run in background — verify session and refresh data quietly
+  try {
+    const { data: { session } } = await sb.auth.getSession();
+    if (!session) {
+      // Session expired — redirect to login
+      _clearCachedUser();
+      document.getElementById('app-view').style.display = 'none';
+      document.getElementById('auth-sec').style.display = 'block';
+      show('v-signin');
+      toast('Session expired — please sign in again', 'er');
+      return;
+    }
+    A.user = session.user;
+    // Refresh data from Supabase quietly
+    await Promise.all([loadPortfolios(), loadWatchlist(), loadPriceHistory()]);
+    _saveToCache();
+    renderAll(); // re-render with fresh server data
+    // Sync prices in background
+    setTimeout(() => syncPrices(), 500);
+    // Market update inline widget
+    setTimeout(async () => {
+      try {
+        const dates = await fetchMuDates();
+        if (dates && dates[0]) {
+          const r = await fetchMuReport(dates[0]);
+          if (r) { _muReport = r; renderMuReport(r); }
+        }
+      } catch(e) {}
+    }, 2000);
+  } catch(e) {
+    // Network error — still show cached data, just show a small notice
+    setST('⚠ Offline — showing cached data');
+  }
 }
 
 function hideLoading() {
@@ -1010,16 +1107,39 @@ function hideLoading() {
 }
 
 async function loadApp() {
+  // Show app shell immediately
   document.getElementById('auth-sec').style.display = 'none';
   document.getElementById('app-view').style.display = 'flex';
   updUserUI();
-  await Promise.all([loadPortfolios(), loadWatchlist(), loadPriceHistory()]);
   applyTheme(localStorage.getItem(TK) || 'dark');
+
+  // Show loading state in main area while fetching
+  const main = document.getElementById('v-portfolio');
+  if (main) main.innerHTML = '<div style="padding:40px;text-align:center;color:var(--t3);font-family:DM Mono,monospace;font-size:11px"><div style="font-size:24px;margin-bottom:10px;animation:pulse 1.5s infinite">⟳</div>Loading your portfolios...</div>';
+  document.getElementById('v-portfolio').style.display = 'block';
+  document.getElementById('v-empty').style.display = 'none';
+
+  // Fetch all data in parallel with a 10s timeout
+  try {
+    const timeout = new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 10000));
+    await Promise.race([
+      Promise.all([loadPortfolios(), loadWatchlist(), loadPriceHistory()]),
+      timeout
+    ]);
+  } catch(e) {
+    // Timeout or error — still try to show what we have
+    console.warn('Data load issue:', e.message);
+  }
+
+  _saveToCache();
   renderAll();
   updateMkt();
   setInterval(updateMkt, 60000);
-  setTimeout(() => syncPrices(), 1500);
-  // Background load of latest market update for inline widget
+
+  // Sync prices after UI is visible (non-blocking)
+  setTimeout(() => syncPrices(), 800);
+
+  // Market update inline widget — load after everything else
   setTimeout(async () => {
     try {
       const dates = await fetchMuDates();
@@ -1027,11 +1147,11 @@ async function loadApp() {
         const r = await fetchMuReport(dates[0]);
         if (r) { _muReport = r; renderMuReport(r); }
       }
-    } catch (e) {
+    } catch(e) {
       const t = document.getElementById('mu-inline-title');
-      if (t) t.textContent = 'Market Update — click to load latest B58 report';
+      if (t) t.textContent = 'Market Update — click 📰 to load';
     }
-  }, 3000);
+  }, 2500);
 }
 
 function updUserUI() {
@@ -1099,12 +1219,20 @@ async function doSignIn() {
   const pw = document.getElementById('si-pw').value;
   if (!em || !pw) { alrt('si-alert', 'Please enter your email and password.'); return; }
   const btn = document.getElementById('si-btn'); btn.disabled = true; btn.textContent = '⟳ Signing in...';
-  const { error } = await sb.auth.signInWithPassword({ email: em, password: pw });
+  const { data: signInData, error } = await sb.auth.signInWithPassword({ email: em, password: pw });
   btn.disabled = false; btn.textContent = 'Sign In →';
   if (error) {
     if (error.message.includes('Invalid login') || error.message.includes('invalid')) alrt('si-alert', '✗ Incorrect email or password. Please try again.');
     else if (error.message.includes('Email not confirmed')) alrt('si-alert', '✗ Please confirm your email first. Check your inbox.');
     else alrt('si-alert', '✗ ' + error.message);
+    return;
+  }
+  // Don't wait for onAuthStateChange — load immediately
+  if (signInData?.session) {
+    A.user = signInData.session.user;
+    _setCachedUser(signInData.session.user);
+    document.getElementById('auth-sec').style.display = 'none';
+    await loadApp();
   }
 }
 
@@ -1133,8 +1261,11 @@ async function loadPortfolios() {
   const uid = A.user.id;
   const { data: ports } = await sb.from('portfolios').select('*').eq('user_id', uid).order('created_at');
   if (!ports || ports.length === 0) { A.portfolios = []; A.activeId = null; return; }
-  const { data: holdings } = await sb.from('holdings').select('*').eq('user_id', uid);
-  const { data: txs } = await sb.from('transactions').select('*').eq('user_id', uid).order('transaction_date', { ascending: false });
+  // Fetch holdings and transactions in parallel (was sequential before = 2x slower)
+  const [{ data: holdings }, { data: txs }] = await Promise.all([
+    sb.from('holdings').select('*').eq('user_id', uid),
+    sb.from('transactions').select('*').eq('user_id', uid).order('transaction_date', { ascending: false })
+  ]);
   A.portfolios = ports.map(p => ({
     id: p.id, name: p.name, desc: p.description, av: p.avatar, col: p.color,
     holdings: (holdings || []).filter(h => h.portfolio_id === p.id).map(h => ({
@@ -1271,8 +1402,10 @@ async function finalizeSync(n, src) {
   setST('✓ ' + n + ' stocks · ' + A.lastSync);
   const el = document.getElementById('sb-sync'); if (el) el.textContent = A.lastSync + ' · merolagani';
   toast('✓ ' + n + ' prices synced', 'ok');
-  // Save closing price snapshot to Supabase (once per day)
-  await saveClosingSnapshot();
+  // Cache prices to localStorage for instant startup
+  try { localStorage.setItem('nepse_px_cache', JSON.stringify({ prices: A.prices, lastSync: A.lastSync, ts: Date.now() })); } catch(e){}
+  // Save closing price snapshot to Supabase (once per day, non-blocking)
+  saveClosingSnapshot().catch(e => console.warn('snapshot:', e));
 }
 
 async function saveClosingSnapshot() {
@@ -2365,6 +2498,18 @@ function quickAddToWatch(sym) {
   renderMain(); // refresh watchlist section
 }
 
+
+// ── Progressive loading text ──
+(function() {
+  const msgs = ['CONNECTING TO SUPABASE','CHECKING SESSION','LOADING YOUR DATA','ALMOST READY'];
+  let i = 0;
+  const el = document.getElementById('loading-txt');
+  const t = setInterval(() => {
+    if (!el || !document.getElementById('loading-screen')) { clearInterval(t); return; }
+    el.textContent = msgs[Math.min(i++, msgs.length-1)];
+    if (i >= msgs.length) clearInterval(t);
+  }, 600);
+})();
 
 // Kick off
 init();
