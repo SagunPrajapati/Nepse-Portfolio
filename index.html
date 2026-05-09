@@ -470,7 +470,7 @@ tr:hover .row-act{opacity:1}
 <div id="loading-screen">
   <div class="loading-logo">📈</div>
   <div class="loading-bar"><div class="loading-fill"></div></div>
-  <div class="loading-txt" id="loading-txt">NEPSE PORTFOLIO · CONNECTING</div>
+  <div class="loading-txt">NEPSE PORTFOLIO · LOADING</div>
 </div>
 
 <!-- AUTH -->
@@ -950,7 +950,7 @@ tr:hover .row-act{opacity:1}
 // SUPABASE CONFIG
 // ════════════════════════════════════════════════════
 const SUPA_URL = 'https://kqfaatfbyhgeueptbyym.supabase.co';
-const SUPA_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImtxZmFhdGZieWhnZXVlcHRieXltIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzgxNjEzNDMsImV4cCI6MjA5MzczNzM0M30.5roD8PA1_SXesgFKywfDnv3TbDeCrtzDQ9WH6KzJ6nc';
+const SUPA_KEY = 'sb_publishable_4gh8o42D1OYL2B4KBE4RAg_4agVAehM';
 const sb = supabase.createClient(SUPA_URL, SUPA_KEY);
 
 // ════════════════════════════════════════════════════
@@ -980,161 +980,28 @@ let CH = { alloc: null, pl: null };
 // ════════════════════════════════════════════════════
 async function init() {
   applyTheme(localStorage.getItem(TK) || 'dark');
-
-  // ══ STEP 1: Check cached user FIRST — never block on network ══
-  const cachedUser = _getCachedUser();
-  if (cachedUser) {
-    // Render instantly from cache — user sees their data in <100ms
-    A.user = cachedUser;
-    _loadFromCache();
-    hideLoading();
-    document.getElementById('auth-sec').style.display = 'none';
-    document.getElementById('app-view').style.display = 'flex';
-    updUserUI();
-    applyTheme(localStorage.getItem(TK) || 'dark');
-    renderAll();
-    updateMkt();
-    setInterval(updateMkt, 60000);
-    // Background sync — won't block UI
-    _syncWithSupabase();
-    return;
-  }
-
-  // ══ STEP 2: No cache — must do fresh auth, with strict timeout ══
-  let session = null;
-  try {
-    const r = await Promise.race([
-      sb.auth.getSession(),
-      new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 4000))
-    ]);
-    session = r?.data?.session || null;
-  } catch(e) {
-    // Supabase unreachable (allowlist, network, etc.)
-    hideLoading();
-    _showSupabaseError(e.message === 'timeout' ?
-      'Connection timed out. Check your internet connection or Supabase API allowlist settings.' :
-      e.message
-    );
-    return;
-  }
-
+  const { data: { session } } = await sb.auth.getSession();
   hideLoading();
   if (session) {
     A.user = session.user;
-    _setCachedUser(session.user);
     await loadApp();
   } else {
     document.getElementById('auth-sec').style.display = 'block';
     show('v-signin');
   }
-
+  // Listen for auth state changes
   sb.auth.onAuthStateChange(async (event, session) => {
     if (event === 'SIGNED_IN' && session) {
       A.user = session.user;
-      _setCachedUser(session.user);
       document.getElementById('auth-sec').style.display = 'none';
       await loadApp();
     } else if (event === 'SIGNED_OUT') {
-      A.user = null; _clearCachedUser();
-      A.portfolios = []; A.activeId = null; A.watchlist = [];
+      A.user = null;
       document.getElementById('app-view').style.display = 'none';
       document.getElementById('auth-sec').style.display = 'block';
       show('v-signin');
     }
   });
-}
-
-function _showSupabaseError(msg) {
-  document.getElementById('auth-sec').style.display = 'block';
-  document.getElementById('v-signin').style.display = 'flex';
-  const card = document.querySelector('#v-signin .auth-card');
-  if (!card) return;
-  const box = document.createElement('div');
-  box.style.cssText = 'background:#1a0a0a;border:2px solid #ff4757;border-radius:12px;padding:16px;margin-bottom:16px;font-size:11px;font-family:DM Mono,monospace;line-height:1.8;color:#ff8090';
-  box.innerHTML = '<div style="font-weight:700;font-size:13px;margin-bottom:8px;color:#ff4757">⚠ Cannot connect to Supabase</div>' +
-    '<div style="color:#d0a0a0;margin-bottom:10px">' + msg + '</div>' +
-    '<div style="color:#ff9060;font-weight:700;margin-bottom:6px">How to fix:</div>' +
-    '<div style="color:#c09080">1. Go to <a href="https://supabase.com/dashboard" target="_blank" style="color:#ff9040">supabase.com/dashboard</a></div>' +
-    '<div style="color:#c09080">2. Settings → API → <strong>API Settings</strong></div>' +
-    '<div style="color:#c09080">3. Scroll to <strong>"Allowed origins / CORS"</strong></div>' +
-    '<div style="color:#c09080">4. Add <strong>*</strong> (allow all) or your GitHub Pages URL</div>' +
-    '<div style="color:#c09080">5. Also check Settings → <strong>Network Restrictions</strong> → disable if on</div>' +
-    '<div style="margin-top:10px"><button onclick="location.reload()" style="background:#ff4757;color:#fff;border:none;border-radius:7px;padding:8px 16px;cursor:pointer;font-size:12px;font-weight:700">↻ Retry</button></div>';
-  card.insertBefore(box, card.firstChild);
-}
-
-// ── USER CACHE (for instant startup) ──
-const UC_KEY = 'nepse_ucache_v1';
-const DC_KEY = 'nepse_dcache_v1';
-function _getCachedUser() { try { const u = JSON.parse(localStorage.getItem(UC_KEY)||'null'); if(u&&u.id&&u.email) return u; } catch(e){} return null; }
-function _setCachedUser(u) { try { localStorage.setItem(UC_KEY, JSON.stringify({id:u.id,email:u.email,user_metadata:u.user_metadata})); } catch(e){} }
-function _clearCachedUser() { localStorage.removeItem(UC_KEY); localStorage.removeItem(DC_KEY); }
-
-function _loadFromCache() {
-  // Load portfolios/watchlist from localStorage so UI renders instantly
-  try {
-    const cached = JSON.parse(localStorage.getItem(DC_KEY)||'null');
-    if (cached && cached.portfolios) {
-      A.portfolios = cached.portfolios;
-      A.activeId = cached.activeId || A.portfolios[0]?.id || null;
-      A.watchlist = cached.watchlist || [];
-    }
-    // Load price cache
-    const pxc = JSON.parse(localStorage.getItem('nepse_px_cache')||'null');
-    if (pxc && pxc.prices) { A.prices = pxc.prices; A.lastSync = pxc.lastSync; }
-  } catch(e){}
-}
-
-function _saveToCache() {
-  try {
-    localStorage.setItem(DC_KEY, JSON.stringify({
-      portfolios: A.portfolios, activeId: A.activeId, watchlist: A.watchlist, ts: Date.now()
-    }));
-  } catch(e){}
-}
-
-async function _syncWithSupabase() {
-  // Run in background — verify session and refresh data quietly
-  // Has its own timeout so it never blocks the UI
-  try {
-    const sessionResult = await Promise.race([
-      sb.auth.getSession(),
-      new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 5000))
-    ]);
-    const session = sessionResult?.data?.session;
-    if (!session) {
-      _clearCachedUser();
-      document.getElementById('app-view').style.display = 'none';
-      document.getElementById('auth-sec').style.display = 'block';
-      show('v-signin');
-      toast('Session expired — please sign in again', 'er');
-      return;
-    }
-    A.user = session.user;
-    _setCachedUser(session.user);
-    // Refresh data quietly — don't show loading, just update in background
-    await Promise.allSettled([
-      loadPortfolios(),
-      loadWatchlist(),
-      loadPriceHistory()
-    ]);
-    _saveToCache();
-    renderAll();
-    setTimeout(() => syncPrices(), 500);
-    setTimeout(async () => {
-      try {
-        const dates = await fetchMuDates();
-        if (dates && dates[0]) {
-          const r = await fetchMuReport(dates[0]);
-          if (r) { _muReport = r; renderMuReport(r); }
-        }
-      } catch(e) {}
-    }, 2000);
-  } catch(e) {
-    // Supabase unreachable — show cached data with offline indicator
-    setST('⚠ Offline mode — cached data');
-    toast('Working offline — showing cached data', 'er');
-  }
 }
 
 function hideLoading() {
@@ -1143,42 +1010,16 @@ function hideLoading() {
 }
 
 async function loadApp() {
-  // Show app shell immediately
   document.getElementById('auth-sec').style.display = 'none';
   document.getElementById('app-view').style.display = 'flex';
   updUserUI();
+  await Promise.all([loadPortfolios(), loadWatchlist(), loadPriceHistory()]);
   applyTheme(localStorage.getItem(TK) || 'dark');
-
-  // Show loading state in main area while fetching
-  const main = document.getElementById('v-portfolio');
-  if (main) main.innerHTML = '<div style="padding:40px;text-align:center;color:var(--t3);font-family:DM Mono,monospace;font-size:11px"><div style="font-size:24px;margin-bottom:10px;animation:pulse 1.5s infinite">⟳</div>Loading your portfolios...</div>';
-  document.getElementById('v-portfolio').style.display = 'block';
-  document.getElementById('v-empty').style.display = 'none';
-
-  // Fetch all data in parallel — each with individual 8s timeout
-  const withTimeout = (p, label) => Promise.race([
-    p,
-    new Promise((_, rej) => setTimeout(() => rej(new Error(label + ' timed out')), 8000))
-  ]);
-  try {
-    await Promise.all([
-      withTimeout(loadPortfolios(), 'portfolios').catch(e => { console.warn(e.message); }),
-      withTimeout(loadWatchlist(),  'watchlist').catch(e => { console.warn(e.message); }),
-      withTimeout(loadPriceHistory(),'prices').catch(e => { console.warn(e.message); }),
-    ]);
-  } catch(e) {
-    console.warn('Data load error:', e.message);
-  }
-
-  _saveToCache();
   renderAll();
   updateMkt();
   setInterval(updateMkt, 60000);
-
-  // Sync prices after UI is visible (non-blocking)
-  setTimeout(() => syncPrices(), 800);
-
-  // Market update inline widget — load after everything else
+  setTimeout(() => syncPrices(), 1500);
+  // Background load of latest market update for inline widget
   setTimeout(async () => {
     try {
       const dates = await fetchMuDates();
@@ -1186,11 +1027,11 @@ async function loadApp() {
         const r = await fetchMuReport(dates[0]);
         if (r) { _muReport = r; renderMuReport(r); }
       }
-    } catch(e) {
+    } catch (e) {
       const t = document.getElementById('mu-inline-title');
-      if (t) t.textContent = 'Market Update — click 📰 to load';
+      if (t) t.textContent = 'Market Update — click to load latest B58 report';
     }
-  }, 2500);
+  }, 3000);
 }
 
 function updUserUI() {
@@ -1243,20 +1084,12 @@ async function doSignUp() {
   if (pw !== pw2) { document.getElementById('su-pw2').classList.add('err'); document.getElementById('su-pw2-e').style.display = 'block'; ok = false; }
   if (!ok) return;
   const btn = document.getElementById('su-btn'); btn.disabled = true; btn.textContent = '⟳ Creating...';
-  let signUpError = null;
-  try {
-    const r = await Promise.race([
-      sb.auth.signUp({ email: em, password: pw, options: { data: { first_name: fn || 'User', last_name: ln, phone: ph } } }),
-      new Promise((_, rej) => setTimeout(() => rej(new Error('Connection timed out. Check Supabase API allowlist settings.')), 8000))
-    ]);
-    signUpError = r?.error;
-  } catch(e) {
-    btn.disabled = false; btn.textContent = 'Create Account →';
-    alrt('su-alert', '✗ ' + e.message + '\n\nFix: Supabase Dashboard → Settings → API → add * to allowed origins');
-    return;
-  }
+  const { error } = await sb.auth.signUp({
+    email: em, password: pw,
+    options: { data: { first_name: fn || 'User', last_name: ln, phone: ph } }
+  });
   btn.disabled = false; btn.textContent = 'Create Account →';
-  if (signUpError) { alrt('su-alert', '✗ ' + signUpError.message); return; }
+  if (error) { alrt('su-alert', '✗ ' + error.message); return; }
   alrt('su-alert', '✓ Account created! Check your email to confirm, then sign in.', 'ok');
 }
 
@@ -1266,31 +1099,12 @@ async function doSignIn() {
   const pw = document.getElementById('si-pw').value;
   if (!em || !pw) { alrt('si-alert', 'Please enter your email and password.'); return; }
   const btn = document.getElementById('si-btn'); btn.disabled = true; btn.textContent = '⟳ Signing in...';
-  let signInData = null, error = null;
-  try {
-    const r = await Promise.race([
-      sb.auth.signInWithPassword({ email: em, password: pw }),
-      new Promise((_, rej) => setTimeout(() => rej(new Error('Connection timed out. Check Supabase API allowlist settings.')), 8000))
-    ]);
-    signInData = r?.data; error = r?.error;
-  } catch(e) {
-    btn.disabled = false; btn.textContent = 'Sign In →';
-    alrt('si-alert', '✗ ' + e.message + '\n\nFix: Supabase Dashboard → Settings → API → add * to allowed origins');
-    return;
-  }
+  const { error } = await sb.auth.signInWithPassword({ email: em, password: pw });
   btn.disabled = false; btn.textContent = 'Sign In →';
   if (error) {
     if (error.message.includes('Invalid login') || error.message.includes('invalid')) alrt('si-alert', '✗ Incorrect email or password. Please try again.');
     else if (error.message.includes('Email not confirmed')) alrt('si-alert', '✗ Please confirm your email first. Check your inbox.');
     else alrt('si-alert', '✗ ' + error.message);
-    return;
-  }
-  // Don't wait for onAuthStateChange — load immediately
-  if (signInData?.session) {
-    A.user = signInData.session.user;
-    _setCachedUser(signInData.session.user);
-    document.getElementById('auth-sec').style.display = 'none';
-    await loadApp();
   }
 }
 
@@ -1319,11 +1133,8 @@ async function loadPortfolios() {
   const uid = A.user.id;
   const { data: ports } = await sb.from('portfolios').select('*').eq('user_id', uid).order('created_at');
   if (!ports || ports.length === 0) { A.portfolios = []; A.activeId = null; return; }
-  // Fetch holdings and transactions in parallel (was sequential before = 2x slower)
-  const [{ data: holdings }, { data: txs }] = await Promise.all([
-    sb.from('holdings').select('*').eq('user_id', uid),
-    sb.from('transactions').select('*').eq('user_id', uid).order('transaction_date', { ascending: false })
-  ]);
+  const { data: holdings } = await sb.from('holdings').select('*').eq('user_id', uid);
+  const { data: txs } = await sb.from('transactions').select('*').eq('user_id', uid).order('transaction_date', { ascending: false });
   A.portfolios = ports.map(p => ({
     id: p.id, name: p.name, desc: p.description, av: p.avatar, col: p.color,
     holdings: (holdings || []).filter(h => h.portfolio_id === p.id).map(h => ({
@@ -1460,10 +1271,8 @@ async function finalizeSync(n, src) {
   setST('✓ ' + n + ' stocks · ' + A.lastSync);
   const el = document.getElementById('sb-sync'); if (el) el.textContent = A.lastSync + ' · merolagani';
   toast('✓ ' + n + ' prices synced', 'ok');
-  // Cache prices to localStorage for instant startup
-  try { localStorage.setItem('nepse_px_cache', JSON.stringify({ prices: A.prices, lastSync: A.lastSync, ts: Date.now() })); } catch(e){}
-  // Save closing price snapshot to Supabase (once per day, non-blocking)
-  saveClosingSnapshot().catch(e => console.warn('snapshot:', e));
+  // Save closing price snapshot to Supabase (once per day)
+  await saveClosingSnapshot();
 }
 
 async function saveClosingSnapshot() {
@@ -2556,18 +2365,6 @@ function quickAddToWatch(sym) {
   renderMain(); // refresh watchlist section
 }
 
-
-// ── Progressive loading text ──
-(function() {
-  const msgs = ['CONNECTING TO SUPABASE','CHECKING SESSION','LOADING YOUR DATA','ALMOST READY'];
-  let i = 0;
-  const el = document.getElementById('loading-txt');
-  const t = setInterval(() => {
-    if (!el || !document.getElementById('loading-screen')) { clearInterval(t); return; }
-    el.textContent = msgs[Math.min(i++, msgs.length-1)];
-    if (i >= msgs.length) clearInterval(t);
-  }, 600);
-})();
 
 // Kick off
 init();
